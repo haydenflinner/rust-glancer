@@ -245,8 +245,10 @@ impl PackageCacheStore {
         input: PackageCacheWriteInput<'_>,
         cancellation: &rg_std::CancellationToken,
     ) -> anyhow::Result<PreparedPackageArtifact> {
-        let encoded = PackageCacheCodec::encode_write_input(input, cancellation)
-            .context("encode resident package artifact")?;
+        let encoded = PackageCacheCodec::on_codec_stack(|| {
+            PackageCacheCodec::encode_write_input(input, cancellation)
+        })
+        .context("encode resident package artifact")?;
         self.prepare_artifact(input.header, encoded)
     }
 
@@ -270,17 +272,19 @@ impl PackageCacheStore {
             .read_encoded_semantic_ir_section()
             .map_err(|error| error.into_package_store_error(package))
             .context("read cached Semantic IR section")?;
-        let encoded = PackageCacheCodec::encode_body_update_reusing_cached_sections(
-            input,
-            def_map,
-            semantic_ir,
-            |crate_id, file| {
-                reader
-                    .read_encoded_body_file_shard(crate_id, file)
-                    .map_err(|error| anyhow::Error::new(error.into_package_store_error(package)))
-            },
-            cancellation,
-        )
+        let encoded = PackageCacheCodec::on_codec_stack(|| {
+            PackageCacheCodec::encode_body_update_reusing_cached_sections(
+                input,
+                def_map,
+                semantic_ir,
+                |crate_id, file| {
+                    reader
+                        .read_encoded_body_file_shard(crate_id, file)
+                        .map_err(|error| anyhow::Error::new(error.into_package_store_error(package)))
+                },
+                cancellation,
+            )
+        })
         .context("encode body update")?;
         self.prepare_artifact(input.header, encoded)
     }

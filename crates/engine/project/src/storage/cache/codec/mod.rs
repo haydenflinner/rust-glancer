@@ -56,6 +56,12 @@ pub(crate) const PACKAGE_CACHE_CONTAINER_PREFIX_BYTES: usize = 8 + 4 * size_of::
 // lazy containers; their manifests and individual shards remain bounded.
 const PACKAGE_CACHE_DECODE_LIMIT_BYTES: usize = 384 * 1024 * 1024;
 
+// Wincode walks recursive nodes like `TypeRef` through nested schema calls, so stack depth follows
+// written type nesting rather than an engine-side bound. A dependency with a deeply nested
+// generated type can overflow the small default stack of spawned workers (512 KiB on macOS) even
+// though the payload itself is tiny.
+const CODEC_STACK_SIZE: usize = 64 * 1024 * 1024;
+
 type PackageCacheWincodeConfig =
     wincode::config::Configuration<true, PACKAGE_CACHE_DECODE_LIMIT_BYTES>;
 
@@ -242,6 +248,28 @@ impl EncodedDeclarationSection {
 pub struct PackageCacheCodec;
 
 impl PackageCacheCodec {
+    /// Runs one codec encode or decode on a scratch thread with a deep stack.
+    ///
+    /// Codec work reaches this crate from many different threads (cache writers, deferred
+    /// indexing, query handlers), so the codec owns its recursion budget instead of relying on
+    /// each caller's stack size.
+    pub(crate) fn on_codec_stack<T>(operation: impl FnOnce() -> T + Send) -> T
+    where
+        T: Send,
+    {
+        std::thread::scope(|scope| {
+            let worker = std::thread::Builder::new()
+                .name("rg-cache-codec".to_string())
+                .stack_size(CODEC_STACK_SIZE)
+                .spawn_scoped(scope, operation)
+                .expect("package codec scratch thread should spawn");
+            match worker.join() {
+                Ok(result) => result,
+                Err(payload) => std::panic::resume_unwind(payload),
+            }
+        })
+    }
+
     /// Encode independently writable fragments from borrowed resident phase data.
     pub(crate) fn encode_write_input(
         input: PackageCacheWriteInput<'_>,

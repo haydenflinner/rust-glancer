@@ -102,10 +102,11 @@ impl PackageCacheCodec {
         manifest: &PackageDefMapsManifest,
         crate_ref: CrateRef,
     ) -> anyhow::Result<CrateData> {
-        let crate_data =
+        let crate_data = Self::on_codec_stack(|| {
             wincode::config::deserialize_exact::<CrateData, _>(bytes, Self::wincode_config())
-                .map_err(|error| anyhow::anyhow!("{error}"))
-                .context("while attempting to deserialize package cache DefMap crate")?;
+        })
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .context("while attempting to deserialize package cache DefMap crate")?;
         let crate_manifest = manifest
             .crate_manifest(crate_ref.crate_id)
             .with_context(|| format!("DefMap manifest has no crate {:?}", crate_ref.crate_id))?;

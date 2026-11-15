@@ -310,10 +310,11 @@ impl PackageCacheCodec {
         manifest: &CrateBodiesManifest,
         file: FileId,
     ) -> anyhow::Result<BodyFileShard> {
-        let shard =
+        let shard = Self::on_codec_stack(|| {
             wincode::config::deserialize_exact::<BodyFileShard, _>(bytes, Self::wincode_config())
-                .map_err(|error| anyhow::anyhow!("{error}"))
-                .context("while attempting to deserialize package cache Body IR file shard")?;
+        })
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .context("while attempting to deserialize package cache Body IR file shard")?;
         Self::validate_body_file_shard(&shard, manifest, file)?;
         Ok(shard)
     }

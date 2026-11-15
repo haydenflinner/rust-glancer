@@ -228,9 +228,11 @@ impl PackageCacheCodec {
             "Semantic IR manifest has no crate {:?}",
             crate_id,
         );
-        wincode::config::deserialize_exact::<ItemStore, _>(bytes, Self::wincode_config())
-            .map_err(|error| anyhow::anyhow!("{error}"))
-            .context("while attempting to deserialize package cache Semantic IR items")
+        Self::on_codec_stack(|| {
+            wincode::config::deserialize_exact::<ItemStore, _>(bytes, Self::wincode_config())
+        })
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .context("while attempting to deserialize package cache Semantic IR items")
     }
 
     /// Decodes the visibility lookup index for one valid crate slot.
@@ -244,9 +246,14 @@ impl PackageCacheCodec {
             "Semantic IR manifest has no crate {:?}",
             crate_id,
         );
-        wincode::config::deserialize_exact::<ItemLookupIndex, _>(bytes, Self::wincode_config())
-            .map_err(|error| anyhow::anyhow!("{error}"))
-            .context("while attempting to deserialize package cache Semantic IR lookup index")
+        Self::on_codec_stack(|| {
+            wincode::config::deserialize_exact::<ItemLookupIndex, _>(
+                bytes,
+                Self::wincode_config(),
+            )
+        })
+        .map_err(|error| anyhow::anyhow!("{error}"))
+        .context("while attempting to deserialize package cache Semantic IR lookup index")
     }
 
     #[cfg(test)]
