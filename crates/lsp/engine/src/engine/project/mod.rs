@@ -199,6 +199,7 @@ impl ProjectCoordinator {
                 .package_batch_size(configuration.package_batch_size)
                 .split_indexing_mode(SplitIndexingMode::EarlyStart)
                 .package_residency_policy(configuration.package_residency_policy)
+                .package_indexing_scope(configuration.package_indexing_scope)
                 .memory_hooks(Arc::clone(&self.memory_hooks))
                 .build();
             match result {

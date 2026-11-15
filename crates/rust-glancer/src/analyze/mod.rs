@@ -7,8 +7,8 @@ use anyhow::Context as _;
 use rg_lsp_engine::MemoryControl;
 use rg_profile::ProfileRun;
 use rg_project::{
-    BuildProcessMemory, IndexingPerformancePreference, PackageBatchSize, PackageResidencyPolicy,
-    Project, SplitIndexingMode, StartupCacheLoad,
+    BuildProcessMemory, IndexingPerformancePreference, PackageBatchSize, PackageIndexingScope,
+    PackageResidencyPolicy, Project, SplitIndexingMode, StartupCacheLoad,
 };
 use rg_workspace::{
     CargoMetadataConfig, SysrootSources, WorkspaceLoweringConfig, WorkspaceMetadata,
@@ -20,7 +20,8 @@ mod output;
 mod profile;
 
 pub(crate) use self::{
-    config::{CliIndexingPreference, CliPackageResidencyPolicy, OutputFormat},
+    config::{CliIndexingPreference, CliPackageIndexingScope, CliPackageResidencyPolicy,
+        OutputFormat},
     profile::profile_groups_help,
 };
 
@@ -32,6 +33,7 @@ pub(crate) fn analyze(
     include_memory: bool,
     startup_cache_load: StartupCacheLoad,
     package_residency_policy: PackageResidencyPolicy,
+    package_indexing_scope: PackageIndexingScope,
     indexing_preference: IndexingPerformancePreference,
     package_batch_size: PackageBatchSize,
     target: Option<String>,
@@ -89,6 +91,7 @@ pub(crate) fn analyze(
         .package_batch_size(package_batch_size)
         .split_indexing_mode(SplitIndexingMode::EarlyStart)
         .package_residency_policy(package_residency_policy)
+        .package_indexing_scope(package_indexing_scope)
         .startup_cache_load(startup_cache_load)
         .memory_hooks(crate::memory::project_memory_hooks());
     let builder = if include_memory {

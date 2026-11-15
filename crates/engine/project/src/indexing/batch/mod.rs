@@ -11,15 +11,17 @@
 
 mod schedule;
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Context as _;
-use rg_body_ir::{BodyIrBuildPolicy, BodyIrBuilder, BodyIrDb};
-use rg_def_map::DefMapDb;
+use rg_body_ir::{BodyIrBuildPolicy, BodyIrBuilder, BodyIrDb, PackageBodies};
+use rg_def_map::{DefMapDb, PackageDefMaps};
+use rg_ir_model::PackageSlot;
 use rg_item_tree::ItemTreeDb;
 use rg_package_store::{PackageEntry, PackageStore};
 use rg_parse::ParseDb;
-use rg_semantic_ir::SemanticIrDb;
+use rg_semantic_ir::{SemanticIrDb, SemanticPackage};
 use rg_std::Shrink;
 use rg_text::PackageNameInterners;
 use rg_workspace::WorkspaceMetadata;
@@ -32,8 +34,8 @@ use super::{
     plan::PackageBuildPlan,
 };
 use crate::{
-    IndexingPerformancePreference, PackageBatchSize, PackageResidency, PackageResidencyPlan,
-    SplitIndexingMode, StartupCacheLoad,
+    IndexingPerformancePreference, PackageBatchSize, PackageIndexingScope, PackageResidency,
+    PackageResidencyPlan, SplitIndexingMode, StartupCacheLoad,
     memory::{ProjectMemoryHooks, ProjectMemoryPurgePoint},
     profile::{BuildMemorySampler, metric},
     stats::MacroExpansionLimitBuildSummary,
@@ -51,6 +53,7 @@ pub(super) fn build(
     body_ir_policy: BodyIrBuildPolicy,
     indexing_preference: IndexingPerformancePreference,
     package_residency: &PackageResidencyPlan,
+    package_indexing_scope: PackageIndexingScope,
     cache_plan: &WorkspaceCachePlan,
     cache_store: &PackageCacheStore,
     startup_cache_load: StartupCacheLoad,
@@ -72,6 +75,7 @@ pub(super) fn build(
         startup_cache_load,
         body_ir_policy,
         package_residency,
+        package_indexing_scope,
         cache_plan,
         cache_store,
         workspace,
@@ -113,13 +117,50 @@ pub(super) fn build(
     // Every retained phase begins with the same package-slot shape. A completed batch replaces its
     // selected slots, and offloadable replacements return to lazy markers after their joint
     // artifact has been written.
-    let mut def_map =
-        DefMapDb::from_offloaded_manifests(std::mem::take(&mut build_plan.def_map_manifests));
-    let mut semantic_ir =
-        SemanticIrDb::from_package_store(PackageStore::all_offloaded(parse.package_count()));
+    let mut def_map = DefMapDb::from_package_store(PackageStore::from_entries(
+        std::mem::take(&mut build_plan.def_map_manifests)
+            .into_iter()
+            .enumerate()
+            .map(|(package_idx, manifest)| {
+                let package_slot = PackageSlot(package_idx);
+                if build_plan.unindexed_packages.contains(package_slot) {
+                    let package = &parse.packages()[package_idx];
+                    PackageEntry::resident(PackageDefMaps::new(
+                        package.package_name().to_owned(),
+                        package.edition(),
+                        Vec::new(),
+                        Vec::new(),
+                    ))
+                } else {
+                    PackageEntry::offloaded_with(manifest.map(Arc::new))
+                }
+            })
+            .collect(),
+    ));
+    let mut semantic_ir = SemanticIrDb::from_package_store(PackageStore::from_entries(
+        (0..parse.package_count())
+            .map(|package_idx| {
+                if build_plan.unindexed_packages.contains(PackageSlot(package_idx)) {
+                    PackageEntry::resident(SemanticPackage::default())
+                } else {
+                    PackageEntry::offloaded()
+                }
+            })
+            .collect(),
+    ));
     let body_ir_entries = std::mem::take(&mut build_plan.body_ir_coverage)
         .into_iter()
-        .map(PackageEntry::offloaded_with)
+        .enumerate()
+        .map(|(package_idx, coverage)| {
+            if build_plan
+                .unindexed_packages
+                .contains(PackageSlot(package_idx))
+            {
+                PackageEntry::resident(PackageBodies::default())
+            } else {
+                PackageEntry::offloaded_with(coverage)
+            }
+        })
         .collect();
     let mut body_ir = BodyIrDb::from_package_store(PackageStore::from_entries(body_ir_entries));
     let mut macro_expansion_limit_summary = MacroExpansionLimitBuildSummary::default();
@@ -423,6 +464,7 @@ pub(super) fn build(
     cache_store
         .cleanup_stale_generations()
         .context("while attempting to clean stale package cache generations")?;
+    let unindexed_packages = std::mem::take(&mut build_plan.unindexed_packages);
     drop(build_plan);
 
     // ---------------------------------------------------
@@ -444,6 +486,7 @@ pub(super) fn build(
 
     Ok(BuiltPhases {
         package_source_fingerprints: source_fingerprints,
+        unindexed_packages,
         names,
         parse,
         macro_expansion_limit_summary,

@@ -60,14 +60,20 @@ impl DefMapDb {
     /// Cache hits retain their compact directories. Source-built packages use `None` because
     /// their old artifact is excluded and the build replaces the slot before it becomes visible.
     pub fn from_offloaded_manifests(manifests: Vec<Option<PackageDefMapsManifest>>) -> Self {
-        Self {
-            packages: PackageStore::from_entries(
-                manifests
-                    .into_iter()
-                    .map(|manifest| PackageEntry::offloaded_with(manifest.map(Arc::new)))
-                    .collect(),
-            ),
-        }
+        Self::from_package_store(PackageStore::from_entries(
+            manifests
+                .into_iter()
+                .map(|manifest| PackageEntry::offloaded_with(manifest.map(Arc::new)))
+                .collect(),
+        ))
+    }
+
+    /// Wraps a caller-shaped store, letting the project seed non-offloaded baselines such as
+    /// empty resident stubs for packages that never receive indexing.
+    pub fn from_package_store(
+        packages: PackageStore<PackageDefMaps, Option<Arc<PackageDefMapsManifest>>>,
+    ) -> Self {
+        Self { packages }
     }
 
     pub fn all_offloaded(package_count: usize) -> Self {

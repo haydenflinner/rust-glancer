@@ -8,7 +8,8 @@ use rg_workspace::{CargoMetadataConfig, WorkspaceLoweringConfig, WorkspaceMetada
 
 use super::phases;
 use crate::{
-    IndexingPerformancePreference, PackageBatchSize, PackageResidencyPlan, PackageResidencyPolicy,
+    IndexingPerformancePreference, PackageBatchSize, PackageIndexingScope,
+    PackageResidencyPlan, PackageResidencyPolicy,
     ProjectMemoryHooks, SplitIndexingMode, StartupCacheLoad,
     profile::{BuildMemorySampler, metric},
     state::{ProjectGenerationId, ProjectState},
@@ -26,6 +27,7 @@ pub(crate) fn build_resident_state(
     indexing_preference: IndexingPerformancePreference,
     package_batch_size: PackageBatchSize,
     package_residency_policy: PackageResidencyPolicy,
+    package_indexing_scope: PackageIndexingScope,
     startup_cache_load: StartupCacheLoad,
     memory_hooks: Arc<dyn ProjectMemoryHooks>,
     memory_sampler: &mut BuildMemorySampler,
@@ -98,6 +100,7 @@ pub(crate) fn build_resident_state(
         indexing_preference,
         package_batch_size,
         &package_residency,
+        package_indexing_scope,
         &cache_plan,
         &cache_store,
         startup_cache_load,
@@ -121,6 +124,8 @@ pub(crate) fn build_resident_state(
         package_batch_size,
         package_residency_policy,
         package_residency,
+        unindexed_packages: phases.unindexed_packages,
+        package_indexing_scope,
         memory_hooks,
         names: phases.names,
         parse: Arc::new(phases.parse),

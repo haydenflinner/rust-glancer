@@ -59,10 +59,11 @@ impl SavedBodyBuildInputs {
             .iter()
             .copied()
             .filter(|&crate_ref| {
-                !state
-                    .body_ir
-                    .crate_coverage(crate_ref)
-                    .is_some_and(CrateBodiesCoverage::is_complete)
+                !state.unindexed_packages.contains(crate_ref.package)
+                    && !state
+                        .body_ir
+                        .crate_coverage(crate_ref)
+                        .is_some_and(CrateBodiesCoverage::is_complete)
             })
             .collect::<UniqueVec<_>>();
         let mut files = UniqueVec::new();

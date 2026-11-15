@@ -8,6 +8,7 @@ use std::{
 
 use rg_def_map::MacroExpansionPerformancePreference;
 use rg_ir_model::PackageSlot;
+use rg_std::MemorySize;
 
 use crate::PackageResidencyPlan;
 
@@ -102,6 +103,37 @@ impl IndexingPerformancePreference {
                     .expect("lower-peak-memory Body IR worker limit should be non-zero"),
             ),
             Self::FasterBuilds => None,
+        }
+    }
+}
+
+/// Package-set selector for semantic indexing.
+///
+/// This is a coverage decision, not a residency one: unindexed packages keep their Cargo identity
+/// and package slot so workspace crates can still name them, but their phase data reads as empty
+/// instead of being lowered from source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, MemorySize)]
+#[memsize(leaf)]
+pub enum PackageIndexingScope {
+    /// Lower every package in the Cargo graph through all indexing phases.
+    #[default]
+    All,
+    /// Lower workspace members and sysroot packages only.
+    ///
+    /// Dependency packages stay known by name but are never built, so workspace imports from them
+    /// report as unresolved while workspace-internal resolution still works.
+    WorkspaceOnly,
+}
+
+impl PackageIndexingScope {
+    /// Whether one parsed package belongs to the indexing set.
+    pub(crate) fn indexes_package(&self, package: &rg_parse::Package) -> bool {
+        match self {
+            Self::All => true,
+            // Sysroot packages stay indexed so the prelude and `proc_macro` keep resolving.
+            Self::WorkspaceOnly => {
+                package.is_workspace_member() || package.origin().is_sysroot()
+            }
         }
     }
 }

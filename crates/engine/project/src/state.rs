@@ -72,6 +72,11 @@ pub(crate) struct ProjectState {
     pub(crate) package_batch_size: PackageBatchSize,
     pub(crate) package_residency_policy: PackageResidencyPolicy,
     pub(crate) package_residency: PackageResidencyPlan,
+    /// Packages kept out of indexing by the configured indexing scope. Their phase slots read as
+    /// empty: they may be named from workspace code but carry no declarations or bodies.
+    pub(crate) unindexed_packages: crate::selection::PhasePackageSet,
+    #[memsize(skip)]
+    pub(crate) package_indexing_scope: crate::PackageIndexingScope,
     #[memsize(skip)]
     pub(crate) memory_hooks: Arc<dyn ProjectMemoryHooks>,
     pub(crate) names: PackageNameInterners,
@@ -172,10 +177,13 @@ impl ProjectState {
                     })
             })
             .filter(move |&crate_ref| {
-                !self
-                    .body_ir
-                    .crate_coverage(crate_ref)
-                    .is_some_and(|coverage| self.configured_crate_is_finished(crate_ref, coverage))
+                !self.unindexed_packages.contains(crate_ref.package)
+                    && !self
+                        .body_ir
+                        .crate_coverage(crate_ref)
+                        .is_some_and(|coverage| {
+                            self.configured_crate_is_finished(crate_ref, coverage)
+                        })
             })
     }
 

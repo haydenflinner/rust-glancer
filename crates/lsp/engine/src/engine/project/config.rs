@@ -3,10 +3,14 @@
 use rg_lsp_proto::{
     AnalysisConfig, CargoMetadataTarget as ProtoCargoMetadataTarget,
     IndexingPerformancePreference as ProtoIndexingPerformancePreference,
+    PackageIndexingScope as ProtoPackageIndexingScope,
     PackageResidencyPolicy as ProtoPackageResidencyPolicy,
     SysrootDiscovery as ProtoSysrootDiscovery,
 };
-use rg_project::{IndexingPerformancePreference, PackageBatchSize, PackageResidencyPolicy};
+use rg_project::{
+    IndexingPerformancePreference, PackageBatchSize, PackageIndexingScope,
+    PackageResidencyPolicy,
+};
 #[cfg(test)]
 use rg_workspace::SysrootSources;
 use rg_workspace::{CargoMetadataConfig, WorkspaceLoweringConfig};
@@ -18,6 +22,7 @@ pub(crate) struct ProjectConfiguration {
     pub(super) cargo_metadata_config: CargoMetadataConfig,
     pub(super) workspace_lowering_config: WorkspaceLoweringConfig,
     pub(super) indexing_preference: IndexingPerformancePreference,
+    pub(super) package_indexing_scope: PackageIndexingScope,
     pub(super) package_batch_size: PackageBatchSize,
     pub(super) discover_sysroot: bool,
     #[cfg(test)]
@@ -60,6 +65,10 @@ impl From<AnalysisConfig> for ProjectConfiguration {
                 IndexingPerformancePreference::FasterBuilds
             }
         };
+        let package_indexing_scope = match config.package_indexing_scope {
+            ProtoPackageIndexingScope::All => PackageIndexingScope::All,
+            ProtoPackageIndexingScope::WorkspaceOnly => PackageIndexingScope::WorkspaceOnly,
+        };
         let package_batch_size = PackageBatchSize::new(config.package_batch_size.get())
             .expect("protocol package batch size should remain positive");
 
@@ -68,6 +77,7 @@ impl From<AnalysisConfig> for ProjectConfiguration {
             cargo_metadata_config,
             workspace_lowering_config,
             indexing_preference,
+            package_indexing_scope,
             package_batch_size,
             discover_sysroot: matches!(config.sysroot_discovery, ProtoSysrootDiscovery::Auto),
             #[cfg(test)]

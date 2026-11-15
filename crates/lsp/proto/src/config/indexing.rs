@@ -92,11 +92,57 @@ impl IndexingPerformancePreference {
     }
 }
 
+/// Protocol-level package indexing scope requested by an LSP client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+pub enum PackageIndexingScope {
+    #[default]
+    All,
+    /// Index workspace members and sysroot sources only; dependency packages stay name-known
+    /// but contribute no declarations, so workspace imports from them report unresolved.
+    WorkspaceOnly,
+}
+
+impl PackageIndexingScope {
+    pub(super) fn from_initialization_options(options: Option<&LspAny>) -> anyhow::Result<Self> {
+        let Some(value) =
+            section(options, "indexing").and_then(|indexing| indexing.get("packageScope"))
+        else {
+            return Ok(Self::default());
+        };
+
+        let value = value.as_str().ok_or_else(|| {
+            anyhow::anyhow!("rust-glancer indexing.packageScope must be a string")
+        })?;
+        Self::from_config_name(value).ok_or_else(|| {
+            anyhow::anyhow!(
+                "rust-glancer indexing.packageScope must be one of: all, workspace-only"
+            )
+        })
+    }
+
+    /// Stable kebab-case name accepted in LSP initialization options.
+    pub fn config_name(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::WorkspaceOnly => "workspace-only",
+        }
+    }
+
+    /// Parses the public scope names accepted by frontends.
+    pub fn from_config_name(value: &str) -> Option<Self> {
+        match value {
+            "all" => Some(Self::All),
+            "workspace-only" => Some(Self::WorkspaceOnly),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
-    use super::{IndexingPerformancePreference, PackageBatchSize};
+    use super::{IndexingPerformancePreference, PackageBatchSize, PackageIndexingScope};
 
     #[test]
     fn parses_package_batch_size() {
@@ -145,6 +191,20 @@ mod tests {
             .expect("indexing config should parse");
 
         assert_eq!(config, IndexingPerformancePreference::LowerPeakMemory);
+    }
+
+    #[test]
+    fn parses_package_indexing_scope() {
+        let options = json!({
+            "indexing": {
+                "packageScope": "workspace-only",
+            },
+        });
+
+        let scope = PackageIndexingScope::from_initialization_options(Some(&options))
+            .expect("indexing scope should parse");
+
+        assert_eq!(scope, PackageIndexingScope::WorkspaceOnly);
     }
 
     #[test]

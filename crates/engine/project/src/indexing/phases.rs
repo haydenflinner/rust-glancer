@@ -6,13 +6,16 @@
 //! Only after that discovery loop settles are the source set and the fingerprints retained by the
 //! project finalized.
 
+use std::sync::Arc;
+
 use anyhow::Context as _;
-use rg_body_ir::{BodyIrBuildPolicy, BodyIrBuilder, BodyIrDb};
-use rg_def_map::DefMapDb;
+use rg_body_ir::{BodyIrBuildPolicy, BodyIrBuilder, BodyIrDb, PackageBodies};
+use rg_def_map::{DefMapDb, PackageDefMaps};
+use rg_ir_model::PackageSlot;
 use rg_item_tree::ItemTreeDb;
 use rg_package_store::{PackageEntry, PackageStore};
 use rg_parse::ParseDb;
-use rg_semantic_ir::SemanticIrDb;
+use rg_semantic_ir::{SemanticIrDb, SemanticPackage};
 use rg_std::Shrink;
 use rg_text::PackageNameInterners;
 use rg_workspace::WorkspaceMetadata;
@@ -23,8 +26,8 @@ use super::{
     plan::PackageBuildPlan,
 };
 use crate::{
-    IndexingPerformancePreference, PackageBatchSize, PackageResidencyPlan, SplitIndexingMode,
-    StartupCacheLoad,
+    IndexingPerformancePreference, PackageBatchSize, PackageIndexingScope, PackageResidencyPlan,
+    SplitIndexingMode, StartupCacheLoad,
     memory::{ProjectMemoryHooks, ProjectMemoryPurgePoint},
     profile::{BuildMemorySampler, metric},
     stats::MacroExpansionLimitBuildSummary,
@@ -41,6 +44,7 @@ use crate::{
 /// DefMap, Semantic IR, and Body IR must agree on that package slot's backing artifact.
 pub(super) struct BuiltPhases {
     pub(super) package_source_fingerprints: Vec<Option<Fingerprint>>,
+    pub(super) unindexed_packages: crate::selection::PhasePackageSet,
     pub(super) names: PackageNameInterners,
     pub(super) parse: ParseDb,
     pub(super) macro_expansion_limit_summary: MacroExpansionLimitBuildSummary,
@@ -56,6 +60,7 @@ pub(super) fn build(
     indexing_preference: IndexingPerformancePreference,
     package_batch_size: PackageBatchSize,
     package_residency: &PackageResidencyPlan,
+    package_indexing_scope: PackageIndexingScope,
     cache_plan: &WorkspaceCachePlan,
     cache_store: &PackageCacheStore,
     startup_cache_load: StartupCacheLoad,
@@ -69,6 +74,7 @@ pub(super) fn build(
             body_ir_policy,
             indexing_preference,
             package_residency,
+            package_indexing_scope,
             cache_plan,
             cache_store,
             startup_cache_load,
@@ -94,6 +100,7 @@ pub(super) fn build(
         startup_cache_load,
         body_ir_policy,
         package_residency,
+        package_indexing_scope,
         cache_plan,
         cache_store,
         workspace,
@@ -162,9 +169,29 @@ pub(super) fn build(
     // ----------------
     // Each retained phase starts as an all-offloaded store. Source-built packages are then
     // replaced in every phase DB; omitted packages remain cache-backed and are loaded lazily
-    // through the same package artifact whenever a dependency query needs them.
-    let baseline_def_map =
-        DefMapDb::from_offloaded_manifests(std::mem::take(&mut build_plan.def_map_manifests));
+    // through the same package artifact whenever a dependency query needs them. Packages outside
+    // the indexing scope are the exception: nothing ever writes their artifact, so they read as
+    // empty resident stubs instead of offloaded slots that would fail on demand.
+    let baseline_def_map = DefMapDb::from_package_store(PackageStore::from_entries(
+        std::mem::take(&mut build_plan.def_map_manifests)
+            .into_iter()
+            .enumerate()
+            .map(|(package_idx, manifest)| {
+                let package_slot = PackageSlot(package_idx);
+                if build_plan.unindexed_packages.contains(package_slot) {
+                    let package = &parse.packages()[package_idx];
+                    PackageEntry::resident(PackageDefMaps::new(
+                        package.package_name().to_owned(),
+                        package.edition(),
+                        Vec::new(),
+                        Vec::new(),
+                    ))
+                } else {
+                    PackageEntry::offloaded_with(manifest.map(Arc::new))
+                }
+            })
+            .collect(),
+    ));
     let baseline_def_map_txn =
         baseline_def_map.read_txn_for_subset(loaders.def_map.clone(), &rebuild_subset);
     // Macro expansion may now request an out-of-line module or include. Keep Parse and ItemTree
@@ -234,8 +261,17 @@ pub(super) fn build(
     // --------------------
     // 7. Build semantic IR
     // --------------------
-    let baseline_semantic_ir =
-        SemanticIrDb::from_package_store(PackageStore::all_offloaded(parse.package_count()));
+    let baseline_semantic_ir = SemanticIrDb::from_package_store(PackageStore::from_entries(
+        (0..parse.package_count())
+            .map(|package_idx| {
+                if build_plan.unindexed_packages.contains(PackageSlot(package_idx)) {
+                    PackageEntry::resident(SemanticPackage::default())
+                } else {
+                    PackageEntry::offloaded()
+                }
+            })
+            .collect(),
+    ));
     let mut semantic_ir = baseline_semantic_ir
         .build_packages(
             &item_tree,
@@ -284,7 +320,17 @@ pub(super) fn build(
     // slots use their conservative seed until the builder replaces them below.
     let body_ir_entries = std::mem::take(&mut build_plan.body_ir_coverage)
         .into_iter()
-        .map(PackageEntry::offloaded_with)
+        .enumerate()
+        .map(|(package_idx, coverage)| {
+            if build_plan
+                .unindexed_packages
+                .contains(PackageSlot(package_idx))
+            {
+                PackageEntry::resident(PackageBodies::default())
+            } else {
+                PackageEntry::offloaded_with(coverage)
+            }
+        })
         .collect();
     let mut body_ir = BodyIrDb::from_package_store(PackageStore::from_entries(body_ir_entries));
     // Dependencies need initializer values even when their function bodies are skipped. Install the
@@ -359,6 +405,7 @@ pub(super) fn build(
     // not encounter the expansion guard during this indexing operation.
     let macro_expansion_limit_summary =
         MacroExpansionLimitBuildSummary::capture(&def_map, build_plan.source_packages.as_slice());
+    let unindexed_packages = std::mem::take(&mut build_plan.unindexed_packages);
     drop(build_plan);
 
     // ---------------------------------------------------
@@ -380,6 +427,7 @@ pub(super) fn build(
 
     Ok(BuiltPhases {
         package_source_fingerprints: source_fingerprints,
+        unindexed_packages,
         names,
         parse,
         macro_expansion_limit_summary,

@@ -8,8 +8,9 @@ use rg_workspace::{CargoMetadataConfig, WorkspaceLoweringConfig, WorkspaceMetada
 
 use super::initial::build_resident_state;
 use crate::{
-    BuildProcessMemory, IndexingPerformancePreference, PackageBatchSize, PackageResidencyPolicy,
-    Project, ProjectMemoryHooks, ProjectMemoryPurgePoint, SplitIndexingMode, StartupCacheLoad,
+    BuildProcessMemory, IndexingPerformancePreference, PackageBatchSize, PackageIndexingScope,
+    PackageResidencyPolicy, Project, ProjectMemoryHooks, ProjectMemoryPurgePoint,
+    SplitIndexingMode, StartupCacheLoad,
     memory::NoopProjectMemoryHooks,
     profile::{BuildMemorySampler, record_build_checkpoint},
     storage::{cache::PackageCacheInstance, residency::ResidencyApplication},
@@ -25,6 +26,7 @@ pub struct ProjectBuilder {
     indexing_preference: IndexingPerformancePreference,
     package_batch_size: PackageBatchSize,
     package_residency_policy: PackageResidencyPolicy,
+    package_indexing_scope: PackageIndexingScope,
     startup_cache_load: StartupCacheLoad,
     memory_sampler: BuildMemorySampler,
     memory_hooks: Arc<dyn ProjectMemoryHooks>,
@@ -41,6 +43,7 @@ impl ProjectBuilder {
             indexing_preference: IndexingPerformancePreference::default(),
             package_batch_size: PackageBatchSize::default(),
             package_residency_policy: PackageResidencyPolicy::default(),
+            package_indexing_scope: PackageIndexingScope::default(),
             startup_cache_load: StartupCacheLoad::default(),
             memory_sampler: BuildMemorySampler::disabled(),
             memory_hooks: Arc::new(NoopProjectMemoryHooks),
@@ -85,6 +88,15 @@ impl ProjectBuilder {
         self
     }
 
+    /// Selects which Cargo packages receive semantic indexing.
+    ///
+    /// With [`PackageIndexingScope::WorkspaceOnly`], dependency packages keep their Cargo identity
+    /// but report empty phase data, so workspace imports from them stay unresolved.
+    pub fn package_indexing_scope(mut self, scope: PackageIndexingScope) -> Self {
+        self.package_indexing_scope = scope;
+        self
+    }
+
     pub fn startup_cache_load(mut self, load: StartupCacheLoad) -> Self {
         self.startup_cache_load = load;
         self
@@ -126,6 +138,7 @@ impl ProjectBuilder {
             self.indexing_preference,
             self.package_batch_size,
             self.package_residency_policy,
+            self.package_indexing_scope,
             self.startup_cache_load,
             Arc::clone(&self.memory_hooks),
             &mut memory_sampler,

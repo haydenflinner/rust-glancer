@@ -140,13 +140,17 @@ impl<'a> ResidencyApplication<'a> {
     }
 
     /// Returns all packages selected by the current residency policy.
+    ///
+    /// Packages outside the indexing scope hold empty resident stubs, not real phase data, so
+    /// they must never be offloaded or written as artifacts.
     fn offloadable_packages(project: &ProjectState) -> PhasePackageSet {
         PhasePackageSet::from_packages(
             (0..project.workspace.packages().len())
                 .map(PackageSlot)
                 .filter(|package| {
-                    project.package_residency.package(*package)
-                        == Some(PackageResidency::Offloadable)
+                    !project.unindexed_packages.contains(*package)
+                        && project.package_residency.package(*package)
+                            == Some(PackageResidency::Offloadable)
                 })
                 .collect(),
         )
@@ -168,6 +172,7 @@ impl<'a> ResidencyApplication<'a> {
         for (package_idx, was_rebuilt) in rebuilt.iter().copied().enumerate() {
             let package = PackageSlot(package_idx);
             if was_rebuilt
+                && !project.unindexed_packages.contains(package)
                 && project.package_residency.package(package) == Some(PackageResidency::Offloadable)
             {
                 packages.push(package);

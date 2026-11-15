@@ -52,6 +52,7 @@ fn rebuild_resident_from_source(state: &mut ProjectState) -> anyhow::Result<()> 
         indexing_preference,
         package_batch_size,
         package_residency_policy,
+        state.package_indexing_scope,
         StartupCacheLoad::Disabled,
         memory_hooks,
         &mut memory_sampler,

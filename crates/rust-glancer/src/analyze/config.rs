@@ -1,7 +1,7 @@
 use std::fmt as std_fmt;
 
 use clap::ValueEnum;
-use rg_project::{IndexingPerformancePreference, PackageResidencyPolicy};
+use rg_project::{IndexingPerformancePreference, PackageIndexingScope, PackageResidencyPolicy};
 
 /// CLI-facing package residency names for the `analyze` command.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -23,6 +23,23 @@ impl From<CliPackageResidencyPolicy> for PackageResidencyPolicy {
                 Self::WorkspacePathAndDirectDepsResident
             }
             CliPackageResidencyPolicy::AllOffloadable => Self::AllOffloadable,
+        }
+    }
+}
+
+/// CLI-facing package indexing scope names for the `analyze` command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+pub(crate) enum CliPackageIndexingScope {
+    #[default]
+    All,
+    WorkspaceOnly,
+}
+
+impl From<CliPackageIndexingScope> for PackageIndexingScope {
+    fn from(scope: CliPackageIndexingScope) -> Self {
+        match scope {
+            CliPackageIndexingScope::All => Self::All,
+            CliPackageIndexingScope::WorkspaceOnly => Self::WorkspaceOnly,
         }
     }
 }

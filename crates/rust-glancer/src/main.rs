@@ -13,7 +13,7 @@ mod start_engine;
 mod start_server;
 
 use self::{
-    analyze::{CliIndexingPreference, CliPackageResidencyPolicy},
+    analyze::{CliIndexingPreference, CliPackageIndexingScope, CliPackageResidencyPolicy},
     compare_lsp::CliFixture,
 };
 
@@ -50,6 +50,9 @@ enum Command {
         /// Which packages should remain resident after analysis is built.
         #[clap(long = "package-residency", value_enum, default_value = "all-resident")]
         package_residency: CliPackageResidencyPolicy,
+        /// Which Cargo packages receive semantic indexing.
+        #[clap(long = "indexing-scope", value_enum, default_value = "all")]
+        indexing_scope: CliPackageIndexingScope,
         /// Which indexing performance trade-off rust-glancer should prioritize.
         #[clap(
             long = "indexing-preference",
@@ -108,6 +111,7 @@ fn main() -> anyhow::Result<()> {
             memory,
             load,
             package_residency,
+            indexing_scope,
             indexing_preference,
             package_batch_size,
             target,
@@ -124,6 +128,7 @@ fn main() -> anyhow::Result<()> {
                     StartupCacheLoad::Disabled
                 },
                 package_residency.into(),
+                indexing_scope.into(),
                 indexing_preference.into(),
                 package_batch_size,
                 target,

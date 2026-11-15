@@ -25,11 +25,18 @@ pub(crate) fn rebuild_packages(
     state: &mut ProjectState,
     packages: &[PackageSlot],
 ) -> anyhow::Result<()> {
+    // Packages outside the indexing scope hold empty stubs, not real phase data, so a touched
+    // dependency source must not schedule a rebuild for them.
+    let packages = packages
+        .iter()
+        .copied()
+        .filter(|package| !state.unindexed_packages.contains(*package))
+        .collect::<Vec<_>>();
     if packages.is_empty() {
         return Ok(());
     }
 
-    match try_rebuild_packages(state, packages) {
+    match try_rebuild_packages(state, &packages) {
         Ok(()) => {
             state
                 .memory_hooks

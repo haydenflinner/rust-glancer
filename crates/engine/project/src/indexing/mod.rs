@@ -22,7 +22,8 @@ mod split;
 pub use self::{
     builder::ProjectBuilder,
     config::{
-        IndexingPerformancePreference, PackageBatchSize, SplitIndexingMode, StartupCacheLoad,
+        IndexingPerformancePreference, PackageBatchSize, PackageIndexingScope,
+        SplitIndexingMode, StartupCacheLoad,
     },
     split::{
         AnalysisSurface, BodyPublication, BodyPublicationOutcome, SavedBodyBuildInputs,

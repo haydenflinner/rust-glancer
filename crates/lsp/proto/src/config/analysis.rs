@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     AnalysisCfgConfig, CargoMetadataConfig, IndexingPerformancePreference, PackageBatchSize,
-    PackageResidencyPolicy, SysrootDiscovery,
+    PackageIndexingScope, PackageResidencyPolicy, SysrootDiscovery,
 };
 
 /// Analysis configuration sent by the LSP client during initialization.
@@ -15,6 +15,7 @@ pub struct AnalysisConfig {
     #[serde(default)]
     pub sysroot_discovery: SysrootDiscovery,
     pub indexing_preference: IndexingPerformancePreference,
+    pub package_indexing_scope: PackageIndexingScope,
     pub package_batch_size: PackageBatchSize,
     pub cfg: AnalysisCfgConfig,
 }
@@ -31,6 +32,8 @@ impl AnalysisConfig {
                 options,
             )
             .context("parse indexing performance preference")?,
+            package_indexing_scope: PackageIndexingScope::from_initialization_options(options)
+                .context("parse package indexing scope")?,
             package_batch_size: PackageBatchSize::from_initialization_options(options)
                 .context("parse package batch size")?,
             cfg: AnalysisCfgConfig::from_initialization_options(options)

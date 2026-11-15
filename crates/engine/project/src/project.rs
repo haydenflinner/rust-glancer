@@ -62,6 +62,11 @@ impl Project {
         self.state.indexing_preference
     }
 
+    /// Returns how many parsed packages were skipped by the configured indexing scope.
+    pub fn unindexed_package_count(&self) -> usize {
+        self.state.unindexed_packages.as_slice().len()
+    }
+
     /// Returns the package batch size configured for lower-memory indexing.
     pub fn package_batch_size(&self) -> PackageBatchSize {
         self.state.package_batch_size

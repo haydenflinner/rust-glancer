@@ -16,7 +16,7 @@ pub use self::{
     cargo::{CargoMetadataConfig, CargoMetadataTarget},
     cfg::AnalysisCfgConfig,
     diagnostics::DiagnosticsConfig,
-    indexing::{IndexingPerformancePreference, PackageBatchSize},
+    indexing::{IndexingPerformancePreference, PackageBatchSize, PackageIndexingScope},
     inlay_hints::InlayHintsConfig,
     sysroot::SysrootDiscovery,
 };

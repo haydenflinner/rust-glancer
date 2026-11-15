@@ -8,7 +8,7 @@ use rg_workspace::WorkspaceMetadata;
 
 use super::cache_probe::{StartupCacheProbe, StartupPackageSelection};
 use crate::{
-    PackageResidencyPlan, StartupCacheLoad,
+    PackageIndexingScope, PackageResidencyPlan, StartupCacheLoad,
     selection::PhasePackageSet,
     storage::cache::{PackageCacheStore, WorkspaceCachePlan},
 };
@@ -27,6 +27,9 @@ pub(super) struct PackageBuildPlan {
     pub(super) def_map_manifests: Vec<Option<rg_def_map::PackageDefMapsManifest>>,
     /// Exact cache-hit coverage plus a conservative seed for packages rebuilt immediately.
     pub(super) body_ir_coverage: Vec<PackageBodiesCoverage>,
+    /// Packages excluded from indexing by the indexing scope. They keep their package slots and
+    /// Cargo metadata but every phase store reads them as empty.
+    pub(super) unindexed_packages: PhasePackageSet,
 }
 
 impl PackageBuildPlan {
@@ -39,6 +42,7 @@ impl PackageBuildPlan {
         startup_cache_load: StartupCacheLoad,
         body_ir_policy: BodyIrBuildPolicy,
         package_residency: &PackageResidencyPlan,
+        package_indexing_scope: PackageIndexingScope,
         cache_plan: &WorkspaceCachePlan,
         cache_store: &PackageCacheStore,
         workspace: &WorkspaceMetadata,
@@ -71,7 +75,20 @@ impl PackageBuildPlan {
                 .iter()
                 .enumerate()
                 .filter_map(|(package_idx, selection)| {
-                    matches!(selection, StartupPackageSelection::BuildFromSource)
+                    (matches!(selection, StartupPackageSelection::BuildFromSource)
+                        && package_indexing_scope
+                            .indexes_package(&parse.packages()[package_idx]))
+                    .then_some(PackageSlot(package_idx))
+                })
+                .collect(),
+        );
+        let unindexed_packages = PhasePackageSet::from_packages(
+            parse
+                .packages()
+                .iter()
+                .enumerate()
+                .filter_map(|(package_idx, package)| {
+                    (!package_indexing_scope.indexes_package(package))
                         .then_some(PackageSlot(package_idx))
                 })
                 .collect(),
@@ -112,6 +129,7 @@ impl PackageBuildPlan {
             source_packages,
             def_map_manifests,
             body_ir_coverage,
+            unindexed_packages,
         }
     }
 }
