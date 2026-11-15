@@ -240,6 +240,23 @@ impl ScopeBinding {
             .all(|route| route.provenance.is_direct())
     }
 
+    /// Whether every retained route to this definition was installed by `import`.
+    ///
+    /// A `use` may not observe a binding it installed itself. In `use alloc::alloc`, the first
+    /// segment must keep reaching the extern `alloc` crate, not the `alloc` binding this same
+    /// import left in its own module scope on a previous pass. Bindings with a mixed route set
+    /// stay visible because another import or declaration independently provides them.
+    pub(crate) fn installed_only_by(&self, import: ImportRef) -> bool {
+        self.routes().iter().all(|route| {
+            matches!(
+                route.provenance,
+                ScopeBindingProvenance::NamedImport(installed)
+                | ScopeBindingProvenance::GlobImport(installed)
+                    if installed == import
+            )
+        })
+    }
+
     fn priority(&self) -> ScopeBindingPriority {
         let priority = self
             .routes()

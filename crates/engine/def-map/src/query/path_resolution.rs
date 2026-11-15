@@ -500,7 +500,11 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
             ImportKind::Glob => {
                 // `path::*` can name either a module or an enum. Finding either source resolves the
                 // import even when visibility filtering leaves it with no bindings to emit.
-                let sources = self.import_glob_sources(importing_module, import.path.semantic())?;
+                let sources = self.import_glob_sources(
+                    importing_module,
+                    import.path.semantic(),
+                    Some(import_ref),
+                )?;
                 let source_resolved = !sources.is_empty();
                 let mut emitted_binding_count = 0;
 
@@ -510,6 +514,14 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
                             for (name, entry) in self.env.module_scope_entries(source_module)? {
                                 for namespace in Namespace::ALL {
                                     for source_binding in entry.bindings(namespace) {
+                                        // Skip bindings this glob installed into its own scope
+                                        // during an earlier pass. Letting `use self::*` copy them
+                                        // back would make the emitted scope differ every wave.
+                                        if source_module == importing_module
+                                            && source_binding.installed_only_by(import_ref)
+                                        {
+                                            continue;
+                                        }
                                         let Some(binding) = self.imported_binding(
                                             importing_module,
                                             source_binding,
@@ -571,6 +583,7 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
                     importing_module,
                     import.path.semantic(),
                     NamespaceSet::ALL,
+                    Some(import_ref),
                 )?;
                 let source_resolved = !source_bindings.is_empty();
                 if matches!(&import.binding, ImportBinding::Hidden) {
@@ -738,6 +751,7 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
             path.root(),
             path.segments(),
             terminal_filter,
+            None,
         )
     }
 
@@ -748,7 +762,9 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
         path: &Path,
     ) -> Result<Vec<DefId>, E::Error> {
         let mut defs = UniqueVec::new();
-        for (_, binding) in self.import_bindings(importing_module, path, NamespaceSet::ALL)? {
+        for (_, binding) in
+            self.import_bindings(importing_module, path, NamespaceSet::ALL, None)?
+        {
             defs.push(binding.def);
         }
         Ok(defs.into_vec())
@@ -761,7 +777,9 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
         path: &Path,
     ) -> Result<Vec<ModuleRef>, E::Error> {
         let mut modules = UniqueVec::new();
-        for (_, binding) in self.import_bindings(importing_module, path, NamespaceSet::TYPES)? {
+        for (_, binding) in
+            self.import_bindings(importing_module, path, NamespaceSet::TYPES, None)?
+        {
             if let DefId::Module(module_ref) = binding.def {
                 modules.push(module_ref);
             }
@@ -771,13 +789,21 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
     }
 
     /// Resolve a glob import prefix to every source that can export bindings.
+    ///
+    /// `ignored_import` has the same meaning as in `import_bindings`.
     pub fn import_glob_sources(
         &self,
         importing_module: ModuleRef,
         path: &Path,
+        ignored_import: Option<ImportRef>,
     ) -> Result<Vec<GlobImportSource>, E::Error> {
         let mut sources = UniqueVec::new();
-        for (_, binding) in self.import_bindings(importing_module, path, NamespaceSet::TYPES)? {
+        for (_, binding) in self.import_bindings(
+            importing_module,
+            path,
+            NamespaceSet::TYPES,
+            ignored_import,
+        )? {
             match binding.def {
                 DefId::Module(module_ref) => {
                     sources.push(GlobImportSource::Module(module_ref));
@@ -841,14 +867,30 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
     }
 
     /// Resolves an import while preserving the selected binding's semantic visibility.
+    ///
+    /// Pass the import under resolution as `ignored_import` while applying `use` items. A `use`
+    /// must not observe the bindings it installed itself in a *non-terminal* position: in
+    /// `use alloc::alloc`, the first segment reaches the extern `alloc` crate rather than the
+    /// `alloc` module binding this same import left in the importing scope on an earlier pass.
+    /// The terminal segment keeps seeing those bindings: `use IANA_TZDB_VERSION` legitimately
+    /// re-exports a name a sibling glob brought into the same scope, and re-emitting an already
+    /// installed binding is idempotent. Callers resolving paths outside an import replay pass
+    /// `None`.
     pub fn import_bindings(
         &self,
         importing_module: ModuleRef,
         path: &Path,
         terminal_filter: NamespaceSet,
+        ignored_import: Option<ImportRef>,
     ) -> Result<Vec<(Namespace, ScopeBinding)>, E::Error> {
         let Some((terminal, prefix)) = path.segments().split_last() else {
-            let resolved = self.resolve_path(importing_module, path, terminal_filter)?;
+            let resolved = self.resolve_path_segments(
+                importing_module,
+                path.root(),
+                path.segments(),
+                terminal_filter,
+                ignored_import,
+            )?;
             let mut bindings = Vec::new();
             for def in resolved.resolved {
                 let DefId::Module(module_ref) = def else {
@@ -868,16 +910,25 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
         };
 
         if prefix.is_empty() && matches!(path.root(), PathRoot::Relative | PathRoot::Absolute) {
+            // Single-segment relative paths resolve their terminal name directly in the
+            // importing scope. A binding the same import installed there is a stable answer,
+            // not a cycle, so the ignore does not apply to terminal lookups.
             return self.first_name_bindings(
                 importing_module,
                 path.is_absolute(),
                 terminal.as_str(),
                 terminal_filter,
+                None,
             );
         }
 
-        let prefix =
-            self.resolve_path_segments(importing_module, path.root(), prefix, NamespaceSet::TYPES)?;
+        let prefix = self.resolve_path_segments(
+            importing_module,
+            path.root(),
+            prefix,
+            NamespaceSet::TYPES,
+            ignored_import,
+        )?;
         let mut bindings = Vec::new();
         for def in prefix.resolved {
             match def {
@@ -886,6 +937,7 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
                     module_ref,
                     terminal.as_str(),
                     terminal_filter,
+                    None,
                 )?),
                 DefId::Local(enum_def) => bindings.extend(self.enum_variant_bindings(
                     importing_module,
@@ -909,6 +961,7 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
         root: PathRoot,
         segments: &[Name],
         terminal_filter: NamespaceSet,
+        ignored_import: Option<ImportRef>,
     ) -> Result<ResolvePathResult, E::Error> {
         let (mut current_defs, remaining_segments, consumed_first_name, root_component_count) =
             match root {
@@ -922,6 +975,7 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
                         root.is_absolute(),
                         first_segment.as_str(),
                         NamespaceSet::for_segment(!remaining_segments.is_empty(), terminal_filter),
+                        ignored_import,
                     )? {
                         defs.push(binding.def);
                     }
@@ -953,6 +1007,7 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
                     segment_idx + 1 < remaining_segments.len(),
                     terminal_filter,
                 ),
+                ignored_import,
             )?;
 
             if current_defs.is_empty() {
@@ -1012,15 +1067,20 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
         current_defs: Vec<DefId>,
         segment: &Name,
         filter: NamespaceSet,
+        ignored_import: Option<ImportRef>,
     ) -> Result<Vec<DefId>, E::Error> {
         let mut next_defs = UniqueVec::new();
 
         for current_def in current_defs {
             match current_def {
                 DefId::Module(module_ref) => {
-                    for resolved_def in
-                        self.name_in_module(importing_module, module_ref, segment.as_str(), filter)?
-                    {
+                    for resolved_def in self.name_in_module(
+                        importing_module,
+                        module_ref,
+                        segment.as_str(),
+                        filter,
+                        ignored_import,
+                    )? {
                         next_defs.push(resolved_def);
                     }
                 }
@@ -1045,9 +1105,16 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
         module_ref: ModuleRef,
         name: &str,
         filter: NamespaceSet,
+        ignored_import: Option<ImportRef>,
     ) -> Result<Vec<DefId>, E::Error> {
         let mut defs = UniqueVec::new();
-        for (_, binding) in self.bindings_in_module(importing_module, module_ref, name, filter)? {
+        for (_, binding) in self.bindings_in_module(
+            importing_module,
+            module_ref,
+            name,
+            filter,
+            ignored_import,
+        )? {
             defs.push(binding.def);
         }
         Ok(defs.into_vec())
@@ -1060,6 +1127,7 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
         absolute: bool,
         name: &str,
         filter: NamespaceSet,
+        ignored_import: Option<ImportRef>,
     ) -> Result<Vec<(Namespace, ScopeBinding)>, E::Error> {
         if absolute {
             if !filter.contains(Namespace::Types) {
@@ -1088,9 +1156,13 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
         while let Some(module_ref) = current {
             let occupied_before = Namespace::ALL
                 .map(|namespace| bindings.iter().any(|(occupied, _)| *occupied == namespace));
-            for (namespace, binding) in
-                self.bindings_in_module(importing_module, module_ref, name, filter)?
-            {
+            for (namespace, binding) in self.bindings_in_module(
+                importing_module,
+                module_ref,
+                name,
+                filter,
+                ignored_import,
+            )? {
                 if !occupied_before[namespace.sort_rank() as usize] {
                     bindings.push((namespace, binding));
                 }
@@ -1130,9 +1202,13 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
         {
             let occupied_before = Namespace::ALL
                 .map(|namespace| bindings.iter().any(|(occupied, _)| *occupied == namespace));
-            for (namespace, binding) in
-                self.bindings_in_module(importing_module, prelude_module, name, filter)?
-            {
+            for (namespace, binding) in self.bindings_in_module(
+                importing_module,
+                prelude_module,
+                name,
+                filter,
+                ignored_import,
+            )? {
                 if !occupied_before[namespace.sort_rank() as usize] {
                     bindings.push((namespace, binding));
                 }
@@ -1148,6 +1224,7 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
         module_ref: ModuleRef,
         name: &str,
         filter: NamespaceSet,
+        ignored_import: Option<ImportRef>,
     ) -> Result<Vec<(Namespace, ScopeBinding)>, E::Error> {
         let Some(entry) = self.env.module_scope_entry(module_ref, name)? else {
             return Ok(Vec::new());
@@ -1156,6 +1233,11 @@ impl<E: CrateResolutionEnv + ?Sized> ScopeResolver<'_, E> {
         let mut bindings = Vec::new();
         for namespace in filter.iter() {
             for binding in entry.bindings(namespace) {
+                // A `use` cannot resolve through the binding it installed into its own scope
+                // during an earlier fixed-point pass. Ignoring it keeps re-resolution stable.
+                if ignored_import.is_some_and(|ignored| binding.installed_only_by(ignored)) {
+                    continue;
+                }
                 if self.binding_is_visible(importing_module, binding)? {
                     bindings.push((namespace, binding.clone()));
                 }
